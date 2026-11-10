@@ -1,0 +1,191 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>AI Regression Test Prioritizer</title>
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+  <style>
+    body { background: #f0f2f5; }
+    .risk-HIGH { color: #dc3545; font-weight: bold; }
+    .risk-MEDIUM { color: #fd7e14; font-weight: bold; }
+    .risk-LOW { color: #198754; font-weight: bold; }
+    .score-bar { height: 8px; border-radius: 4px; background: #dee2e6; }
+    .score-fill { height: 8px; border-radius: 4px; background: #0d6efd; }
+    .hit-badge { font-size: 0.75rem; }
+    .section-card { border-radius: 12px; }
+    #loadingSpinner { display: none; }
+  </style>
+</head>
+<body>
+<div class="container-fluid py-4 px-4">
+  <h3 class="mb-1">🧪 AI-Powered Regression Test Prioritizer</h3>
+  <p class="text-muted mb-4">Analyzes business criticality, code changes, defect history & execution time to prioritize your test suite.</p>
+
+  <div class="row g-4">
+    <!-- Controls -->
+    <div class="col-lg-3">
+      <div class="card section-card shadow-sm p-3">
+        <h6 class="fw-bold mb-3">⚙️ Policy Weights</h6>
+        <div id="weightSliders">
+          <label class="form-label">Business Criticality <span id="lbl_bc">40%</span></label>
+          <input type="range" class="form-range" id="w_bc" min="0" max="100" value="40" oninput="updateLabel('lbl_bc', this.value)">
+          <label class="form-label mt-2">Defect History <span id="lbl_dh">30%</span></label>
+          <input type="range" class="form-range" id="w_dh" min="0" max="100" value="30" oninput="updateLabel('lbl_dh', this.value)">
+          <label class="form-label mt-2">Code Change Relevance <span id="lbl_cc">20%</span></label>
+          <input type="range" class="form-range" id="w_cc" min="0" max="100" value="20" oninput="updateLabel('lbl_cc', this.value)">
+          <label class="form-label mt-2">Execution Time Penalty <span id="lbl_et">10%</span></label>
+          <input type="range" class="form-range" id="w_et" min="0" max="100" value="10" oninput="updateLabel('lbl_et', this.value)">
+        </div>
+
+        <h6 class="fw-bold mt-4 mb-2">🔧 Changed Components</h6>
+        <div id="componentChecks"></div>
+
+        <button class="btn btn-primary w-100 mt-4" onclick="runPrioritization()">
+          <span id="loadingSpinner" class="spinner-border spinner-border-sm me-2"></span>
+          Run Prioritization
+        </button>
+      </div>
+    </div>
+
+    <!-- Results -->
+    <div class="col-lg-9">
+      <!-- Risk Banner -->
+      <div id="riskBanner" class="card section-card shadow-sm p-3 mb-4 d-none">
+        <div class="d-flex justify-content-between align-items-center">
+          <div>
+            <span class="text-muted">Release Risk: </span>
+            <span id="riskLevel" class="fs-5"></span>
+            <span class="text-muted ms-3">Avg Score: </span>
+            <span id="avgScore" class="fw-bold"></span>
+            <span class="text-muted ms-3">High-Risk Tests: </span>
+            <span id="highRiskCount" class="fw-bold text-danger"></span>
+          </div>
+          <div id="riskRec" class="text-end text-muted fst-italic" style="max-width:300px"></div>
+        </div>
+      </div>
+
+      <!-- Coverage Gaps -->
+      <div id="gapsSection" class="card section-card shadow-sm p-3 mb-4 d-none">
+        <h6 class="fw-bold mb-2">⚠️ Coverage Gaps</h6>
+        <div id="gapsList" class="d-flex flex-wrap gap-2"></div>
+      </div>
+
+      <!-- Test Table -->
+      <div class="card section-card shadow-sm p-3">
+        <h6 class="fw-bold mb-3">📋 Prioritized Test Suite</h6>
+        <div class="table-responsive">
+          <table class="table table-hover align-middle mb-0">
+            <thead class="table-light">
+              <tr>
+                <th>#</th>
+                <th>Test</th>
+                <th>Component</th>
+                <th>Score</th>
+                <th>Criticality</th>
+                <th>Defects</th>
+                <th>Duration</th>
+                <th>Justification</th>
+              </tr>
+            </thead>
+            <tbody id="testTableBody">
+              <tr><td colspan="8" class="text-center text-muted py-4">Run prioritization to see results.</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+async function loadComponents() {
+  const res = await fetch("/api/components");
+  const data = await res.json();
+  const container = document.getElementById("componentChecks");
+  container.innerHTML = data.components.map(c => `
+    <div class="form-check">
+      <input class="form-check-input comp-check" type="checkbox" value="${c}" id="comp_${c}">
+      <label class="form-check-label" for="comp_${c}">${c}</label>
+    </div>`).join("");
+}
+
+function updateLabel(id, val) {
+  document.getElementById(id).textContent = val + "%";
+}
+
+function getWeights() {
+  return {
+    business_criticality: +document.getElementById("w_bc").value / 100,
+    defect_history: +document.getElementById("w_dh").value / 100,
+    code_change_relevance: +document.getElementById("w_cc").value / 100,
+    execution_time_penalty: +document.getElementById("w_et").value / 100,
+  };
+}
+
+function getChangedComponents() {
+  return [...document.querySelectorAll(".comp-check:checked")].map(el => el.value);
+}
+
+async function runPrioritization() {
+  const spinner = document.getElementById("loadingSpinner");
+  spinner.style.display = "inline-block";
+
+  const res = await fetch("/api/prioritize", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ changed_components: getChangedComponents(), weights: getWeights() })
+  });
+  const data = await res.json();
+  spinner.style.display = "none";
+
+  renderRisk(data.release_risk);
+  renderGaps(data.coverage_gaps);
+  renderTable(data.prioritized_tests);
+}
+
+function renderRisk(risk) {
+  document.getElementById("riskBanner").classList.remove("d-none");
+  document.getElementById("riskLevel").innerHTML = `<span class="risk-${risk.risk_level}">${risk.risk_level}</span>`;
+  document.getElementById("avgScore").textContent = risk.avg_priority_score;
+  document.getElementById("highRiskCount").textContent = risk.high_risk_test_count;
+  document.getElementById("riskRec").textContent = risk.recommendation;
+}
+
+function renderGaps(gaps) {
+  const section = document.getElementById("gapsSection");
+  const list = document.getElementById("gapsList");
+  if (!gaps.length) { section.classList.add("d-none"); return; }
+  section.classList.remove("d-none");
+  list.innerHTML = gaps.map(g =>
+    `<span class="badge bg-warning text-dark">${g.component}: ${g.gap}</span>`
+  ).join("");
+}
+
+function renderTable(tests) {
+  const tbody = document.getElementById("testTableBody");
+  tbody.innerHTML = tests.map((t, i) => {
+    const pct = Math.round(t.score * 100);
+    const hitBadge = t.code_change_hit
+      ? `<span class="badge bg-success hit-badge ms-1">Changed</span>` : "";
+    return `<tr>
+      <td>${i + 1}</td>
+      <td><strong>${t.name}</strong>${hitBadge}<br><small class="text-muted">${t.id}</small></td>
+      <td><span class="badge bg-secondary">${t.component}</span></td>
+      <td>
+        <div class="d-flex align-items-center gap-2">
+          <span class="fw-bold">${pct}%</span>
+          <div class="score-bar flex-grow-1"><div class="score-fill" style="width:${pct}%"></div></div>
+        </div>
+      </td>
+      <td>${"★".repeat(t.business_criticality)}${"☆".repeat(10 - t.business_criticality)}</td>
+      <td><span class="badge ${t.defect_history >= 5 ? 'bg-danger' : 'bg-light text-dark border'}">${t.defect_history}</span></td>
+      <td>${t.avg_duration_s}s</td>
+      <td><small class="text-muted">${t.justification}</small></td>
+    </tr>`;
+  }).join("");
+}
+
+loadComponents();
+</script>
+</body>
+</html>
